@@ -113,28 +113,84 @@ resolve to a channel it fronts but the connection is not attached to:
    channel-existence information is revealed, so on servers with dynamic channel spaces a
    denial also hides existence — and `-32023` may be unreachable for such addresses,
    which is conforming.
-3. On grant, **atomically** with respect to the connection's message stream:
-   a. The current channel is detached. The server persists whatever per-channel state it
-      persists on disconnect (read cursors, last-seen). Exclusivity is preserved — at no
-      observable point is the connection attached to two presence channels or zero.
-   b. The requested channel is attached.
-   c. The response carries the new channel's descriptor — the §14.3 response shape,
-      unchanged. Servers with the backscroll extension (AUDIT-001 §"history") MAY include
-      `history` exactly as on any open.
-   d. The server emits `channels/changed` with the old channel in `removed` and the new in
-      `added` — the §14.3 notification, unchanged, in its Request form where §14.5 requires
-      it.
+3. On grant, the server performs a **two-phase transition** (prepare → commit). The host's
+   acceptance is part of the transition, not a notification after it: a body MUST NOT be
+   moved somewhere its host has refused to deliver.
+
+   **Prepare.**
+   a. The server emits `channels/changed` **as a Request** (§14.5's itemized form) with the
+      new channel in `added` and the old in `removed`, and awaits the itemized result.
+      This is the host's chance to refuse.
+   b. If the host rejects the new descriptor (`accepted: false`), the transition **aborts**:
+      the connection remains attached to its current channel, unchanged, and the
+      `channels/open` request answers `-32017` with `data: { reason: "host_declined" }`.
+      Nothing about the agent's presence has moved.
+   c. A host that does not implement the inbound Request form, or that fails to answer
+      within the server's timeout, is treated as **declining** — fail-closed, per §5.3's
+      deny-until-policy discipline. (Servers SHOULD state their timeout; 5s matches
+      §10.6's hook guidance.)
+
+   **Commit.** Once accepted:
+   d. The **attachment epoch** increments. Every attachment carries a monotonically
+      increasing `epoch` (per connection), surfaced on the channel descriptor as
+      `metadata.epoch` and echoed on `channels/incoming` messages the server originates
+      after the transition.
+   e. The current channel is detached. The server persists whatever per-channel state it
+      persists on disconnect (read cursors, last-seen).
+   f. The requested channel is attached. Exclusivity is preserved — at no observable point
+      is the connection attached to two presence channels or zero.
+   g. The response carries the new channel's descriptor — the §14.3 response shape,
+      unchanged — including the new epoch. Servers with the backscroll extension
+      (AUDIT-001 §"history") MAY include `history` exactly as on any open.
+
+   **The cutoff, stated precisely.** The epoch increment in (d) is the cutoff instant.
+   - Traffic the server had already dispatched for the OLD channel before the increment
+     remains valid and MUST be processed by the host; it carries the old epoch.
+   - Traffic for the NEW channel MUST NOT be dispatched before the increment.
+   - Host→server messages naming the old channel that arrive after the increment are
+     answered `-32023`; the host learns the boundary from the response rather than being
+     silently dropped. (§14.5's receipt-time validation already requires validating
+     against the *current* attachment; the epoch makes "current" observable to both sides
+     rather than inferable.)
+   - A `channels/open` for a further world arriving mid-transition is answered `-32024`
+     with `data: { reason: "transition_in_progress" }`. Transitions do not nest.
 4. A request naming the **currently attached** channel keeps its existing meaning (re-open /
    backscroll / un-blind) — this RFC changes nothing about it.
 5. Requests naming a channel the server does not front: `-32023` (*Unknown channel*).
    Attachment failures after grant: `-32024` (*Channel open failed*), and the server MUST
    either remain attached to the original channel or surface the connection as closed —
    never half-attached.
-6. Join intent is expressed by the `type`/`address` form only. The `channelId` form
-   remains an opaque reference to an already-registered channel; a `channelId` naming an
-   unattached sibling is `-32023`, not a join. (Ids are server-assigned labels; addresses
-   are the portable way to name a destination, and RFC-004's dial parameter composes with
-   addresses, not ids.)
+6. **Both addressing forms may express join intent.** `ChannelsOpenParams` (the reference
+   library's typed shape) documents `channelId` as *"exact registered channel id, preferred
+   over type/address matching"* — generic host surfaces work in ids, and an address-only
+   rule would make join unreachable from them. Servers MUST accept either form:
+   - `channelId` — an exact reference. The server resolves it against the channels it
+     fronts; unknown ids are `-32023`. Ids are server-assigned, so this form is only
+     available for channels the host has actually seen (via `channels/list` or a prior
+     `channels/changed`).
+   - `type`/`address` — a *description* of a destination, resolvable without having seen it
+     first. This is the form that composes with RFC-004's dial parameter, and the only form
+     that can name a channel the host has never been told about (including, on
+     found-on-attach servers, one that does not exist yet — see §3.2.8).
+
+   When both are present, `channelId` wins and a conflicting `address` is `-32602`
+   (invalid params) rather than silently ignored — two names for one destination that
+   disagree is an authoring bug, not a preference. **This validation MUST precede the
+   already-attached check**, or a conflicting pair in which either half happens to name
+   the current channel passes silently as a plain re-open. (Found by implementation:
+   the natural `channelId === current || address === current` test has exactly this
+   hole.)
+
+7. **Founding is not joining.** On servers where attaching to a non-existent channel
+   *creates* it (the reference deployment's worlds are founded by their first visitor),
+   creation MUST require its own positive authority, distinct from join policy, and MUST
+   NOT be reachable by a join that merely happens to name an unused address. A join naming
+   a channel that does not exist is `-32023` unless the principal separately holds create
+   authority; where it does hold that authority, the server MUST report the distinction in
+   the result (`created: true` on the descriptor's metadata) so that founding a world is
+   never something an agent does by accident. Rationale: join policy answers *may you be
+   here*; creation answers *may you make somewhere new be*, and an operator granting broad
+   travel has not thereby granted unbounded world-founding.
 7. The host's itemized answer to the `channels/changed` Request (§14.5) governs
    **delivery** on the host side, not attachment: presence is server-side fact from step
    3b onward. A host that rejects the new descriptor has declined to receive the channel's
@@ -145,9 +201,23 @@ resolve to a channel it fronts but the connection is not attached to:
 
 A join-capable server SHOULD honor a server-defined dial parameter (for the reference
 deployment, RFC-004's `?world=`) as an initial-attachment request evaluated under the
-**same policy** as §3.2.1, before the first attachment. Denial at dial time MAY fall back
-to the credential's default attachment rather than refusing the connection; servers SHOULD
-document which.
+**same policy** as §3.2.1, before the first attachment.
+
+**A denied dial-time destination MUST NOT silently fall back.** The dialer asked to wake up
+somewhere; landing elsewhere unannounced means the host believes it is in one place while
+its body is in another — the failure this RFC exists to prevent, reintroduced at connect
+time. A server MUST do one of:
+
+- **Refuse the connection**, with a close reason naming the denied destination (default,
+  recommended); or
+- **Attach to the credential's default and announce it prominently**: the first
+  `channels/register` MUST carry `metadata.requestedChannel` (what was asked for) beside
+  the descriptor of what was granted, and the server MUST record the substitution as an
+  authorization event (§3.4).
+
+Silently substituting a destination is non-conforming. A host that cannot distinguish "I am
+where I asked to be" from "I am somewhere else" cannot reason about where its agent is, and
+no later correction reaches the agent that already spoke.
 
 ### 3.4 Audit
 
