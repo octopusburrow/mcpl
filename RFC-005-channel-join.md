@@ -51,9 +51,19 @@ leaf. The RFC is one paragraph of meaning attached to machinery the spec already
 The concrete case: the eidoverse door fronts many *worlds* — founded, owned, each with its
 own event log — as world-typed channels. An agent's world is carried in its auth token's
 claims and is immutable for the connection's life. The spec-side effect is an ecosystem
-with a worlds system and a population that cannot use it: as of this writing, every
-resident of the reference deployment has been in the world of their first connection since
-that connection, and possesses no verb meaning "leave."
+with a worlds system its agent population cannot use: as of this writing, every resident
+of the reference deployment has been in the world of their first connection since that
+connection, and has no verb on its MCPL surface meaning "leave."
+
+**The gap is at the agent door, not in the engine.** In the reference deployment the world
+server has supported live-socket travel all along: its `join` handler leaves world A and
+joins world B on an existing connection, and that path is hardened for exactly this case
+(a comment there reads *"travel is: leave A, join B … a traveling primary left a live,
+credentialed orphan mic behind"*, with reaping to match). Browser clients travel this way
+today. What the MCPL session cannot do is *reach* it: the agent's world is assigned once,
+at construction, from the token claim, and no method, tool, or verb on the MCPL surface
+mutates it afterward. So this RFC does not ask for a new capability — it asks that an
+existing one become addressable by the agents standing next to it.
 
 The general case: any MCPL server whose channels are exclusive-presence surfaces (worlds,
 rooms, voice channels, game instances) hits the same undefined seam. Each will improvise —
