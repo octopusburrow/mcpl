@@ -171,7 +171,7 @@ resolve to a channel it fronts but the connection is not attached to:
    - `type`/`address` — a *description* of a destination, resolvable without having seen it
      first. This is the form that composes with RFC-004's dial parameter, and the only form
      that can name a channel the host has never been told about (including, on
-     found-on-attach servers, one that does not exist yet — see §3.2.8).
+     found-on-attach servers, one that does not exist yet — see item 7).
 
    When both are present, `channelId` wins and a conflicting `address` is `-32602`
    (invalid params) rather than silently ignored — two names for one destination that
@@ -181,7 +181,11 @@ resolve to a channel it fronts but the connection is not attached to:
    the natural `channelId === current || address === current` test has exactly this
    hole.)
 
-7. **Founding is not joining.** On servers where attaching to a non-existent channel
+7. **Founding is not joining.** *(Scope, learned in implementation: this governs
+   destinations the AGENT chooses — an in-session join, or a dial-time request. A
+   credential arriving at the world its operator minted it into is not founding in this
+   sense, even when that world does not exist yet; gating it would refuse every
+   connection to a fresh deployment and would be gating the operator, not the agent.)* On servers where attaching to a non-existent channel
    *creates* it (the reference deployment's worlds are founded by their first visitor),
    creation MUST require its own positive authority, distinct from join policy, and MUST
    NOT be reachable by a join that merely happens to name an unused address. A join naming
@@ -191,7 +195,7 @@ resolve to a channel it fronts but the connection is not attached to:
    never something an agent does by accident. Rationale: join policy answers *may you be
    here*; creation answers *may you make somewhere new be*, and an operator granting broad
    travel has not thereby granted unbounded world-founding.
-7. The host's itemized answer to the `channels/changed` Request (§14.5) governs
+8. The host's itemized answer to the `channels/changed` Request (§14.5) governs
    **delivery** on the host side, not attachment: presence is server-side fact from step
    3b onward. A host that rejects the new descriptor has declined to receive the channel's
    traffic, not un-travelled the agent; servers SHOULD log such rejections rather than
